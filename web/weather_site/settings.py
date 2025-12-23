@@ -3,9 +3,9 @@ import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = 'replace-this-with-a-secure-key-for-prod'
-DEBUG = True
-ALLOWED_HOSTS = []
+SECRET_KEY = os.environ.get('SECRET_KEY', 'replace-this-with-a-secure-key-for-prod')
+DEBUG = os.environ.get('DEBUG', 'False').lower() == 'true'
+ALLOWED_HOSTS = ['izyy720.pythonanywhere.com', 'localhost', '127.0.0.1']
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -62,10 +62,13 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = '/static/'
-STATICFILES_DIRS = [os.path.join(BASE_DIR, 'static')]
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+STATICFILES_DIRS = [
+    BASE_DIR / "weather_app/static",
+]
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-WEATHER_API_KEY = "1fb3a2b608b87c3614b53cb8db42bf62"
+WEATHER_API_KEY = os.environ.get('WEATHER_API_KEY', "1fb3a2b608b87c3614b53cb8db42bf62")
 
 # Cache configuration for performance
 CACHES = {
@@ -78,8 +81,3 @@ CACHES = {
         }
     }
 }
-
-STATIC_URL = '/static/'
-STATICFILES_DIRS = [
-    BASE_DIR / "weather_app/static",
-]

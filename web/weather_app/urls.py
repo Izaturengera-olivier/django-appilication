@@ -12,4 +12,5 @@ urlpatterns = [
     path('monthly-summary/', views.monthly_summary_view, name='monthly_summary'),
     path('map/', views.weather_map, name='weather_map'),
     path('api/predictions/', views.api_predictions, name='api_predictions'),
+    path('api/weekly/<str:district>/', views.api_weekly_predictions, name='api_weekly_predictions'),
 ]

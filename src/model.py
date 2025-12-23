@@ -6,6 +6,13 @@ from sklearn.preprocessing import StandardScaler
 import joblib
 import numpy as np
 import warnings
+import os
+import threading
+
+# Simple in-process cached model loader to avoid repeated joblib loads
+_CACHED_MODEL = None
+_CACHED_MODEL_MTIME = None
+_CACHED_LOCK = threading.Lock()
 
 
 def train_model(X, y, test_size=0.2, random_state=0, n_estimators=300):
@@ -43,8 +50,47 @@ def train_model(X, y, test_size=0.2, random_state=0, n_estimators=300):
 
 
 def save_model(model, path):
-    joblib.dump(model, path)
+    """Save a trained model to the specified path.
+    
+    Args:
+        model: The trained model to save
+        path: File path where to save the model. Parent directories will be created if they don't exist.
+    """
+    # Convert to absolute path and normalize it
+    abs_path = os.path.abspath(path)
+    # Ensure the directory exists
+    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+    # On Windows, ensure we're using the correct path format
+    if os.name == 'nt':
+        abs_path = os.path.normpath(abs_path)
+    # Save the model
+    joblib.dump(model, abs_path)
 
 
 def load_model(path):
     return joblib.load(path)
+
+
+def load_model_cached(path, force_reload=False):
+    """Load and cache the model in-process. If the file's mtime changes
+    or `force_reload` is True, the model will be reloaded.
+    This avoids expensive repeated disk loads per web request.
+    """
+    global _CACHED_MODEL, _CACHED_MODEL_MTIME
+    try:
+        mtime = os.path.getmtime(path)
+    except Exception:
+        mtime = None
+
+    with _CACHED_LOCK:
+        if not force_reload and _CACHED_MODEL is not None and _CACHED_MODEL_MTIME == mtime:
+            return _CACHED_MODEL
+
+        try:
+            model = joblib.load(path, mmap_mode='r')
+        except TypeError:
+            # Older joblib versions may not accept mmap_mode; fall back to default
+            model = joblib.load(path)
+        _CACHED_MODEL = model
+        _CACHED_MODEL_MTIME = mtime
+        return model

@@ -9,7 +9,10 @@ from datetime import datetime
 import sys
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
 import matplotlib
+import hashlib
+import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 matplotlib.use("Agg")
@@ -46,10 +49,13 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.data import generate_synthetic_weather, load_data
 from src.featurize import make_features
-from src.model import train_model, save_model, load_model
+from src.model import train_model, save_model, load_model, load_model_cached
 
 MODEL_PATH = PROJECT_ROOT / 'model.joblib'
 SAMPLE_CSV = PROJECT_ROOT / 'data' / 'sample_weather.csv'
+# Shared requests session for connection pooling (reduces latency)
+SESSION = requests.Session()
+SESSION.mount('https://', HTTPAdapter(pool_maxsize=50, max_retries=2))
 
 
 # -------------------------------
@@ -96,32 +102,47 @@ def admin_logout_view(request):
 @login_required
 @user_passes_test(is_admin)
 def train_view(request):
-    # Corrected call
-    generate_synthetic_weather(365, seed=42, out_csv=str(SAMPLE_CSV))
+    try:
+        # Ensure directories exist
+        SAMPLE_CSV.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Generate synthetic data
+        generate_synthetic_weather(365, seed=42, out_csv=str(SAMPLE_CSV))
 
-    df = load_data(str(SAMPLE_CSV))
-    X, y = make_features(df)
+        df = load_data(str(SAMPLE_CSV))
+        X, y = make_features(df)
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
 
-    model, acc, report, _ = train_model(X_train, y_train)
-    save_model(model, str(MODEL_PATH))
+        model, acc, report, _ = train_model(X_train, y_train)
+        
+        # Use raw string path to avoid encoding issues
+        model_path_str = str(MODEL_PATH).replace('\\', '/')
+        save_model(model, model_path_str)
 
-    preds = model.predict(X_test)
-    cm = confusion_matrix(y_test, preds)
+        preds = model.predict(X_test)
+        cm = confusion_matrix(y_test, preds)
 
-    fig, ax = plt.subplots()
-    ax.imshow(cm)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png")
-    buf.seek(0)
-    cm_url = "data:image/png;base64," + base64.b64encode(buf.read()).decode()
+        fig, ax = plt.subplots()
+        ax.imshow(cm)
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png")
+        buf.seek(0)
+        cm_url = "data:image/png;base64," + base64.b64encode(buf.read()).decode()
+        plt.close(fig)  # Clean up
 
-    return render(request, "weather_app/train.html", {
-        "accuracy": acc,
-        "report": report,
-        "confusion_matrix_url": cm_url
-    })
+        return render(request, "weather_app/train.html", {
+            "accuracy": acc,
+            "report": report,
+            "confusion_matrix_url": cm_url
+        })
+    except Exception as e:
+        return render(request, "weather_app/train.html", {
+            "error": f"Training failed: {str(e)}",
+            "accuracy": None,
+            "report": None,
+            "confusion_matrix_url": None
+        })
 
 
 # -------------------------------
@@ -152,7 +173,7 @@ def fetch_weather_by_coords(district, use_cache=True):
         "appid": settings.WEATHER_API_KEY,
         "units": "metric"
     }
-    response = requests.get(url, params=params, timeout=10)
+    response = SESSION.get(url, params=params, timeout=10)
     data = response.json()
 
     if response.status_code != 200 or "main" not in data:
@@ -271,7 +292,7 @@ def predict_view(request):
 
     # Try to load model with error handling
     try:
-        model = load_model(str(MODEL_PATH))
+        model = load_model_cached(str(MODEL_PATH))
     except Exception as e:
         # Model loading failed - likely compatibility issue
         # Return error message suggesting retraining
@@ -404,7 +425,7 @@ def manual_predict_view(request):
         error = "Model is not trained yet. Please train the model first."
     else:
         try:
-            model = load_model(str(MODEL_PATH))
+            model = load_model_cached(str(MODEL_PATH))
         except Exception as e:
             error = f"Error loading model: {e}"
 
@@ -756,7 +777,7 @@ def api_predictions(request):
         return JsonResponse({'error': 'Model not trained'}, status=404)
     
     try:
-        model = load_model(str(MODEL_PATH))
+        model = load_model_cached(str(MODEL_PATH))
     except Exception as e:
         return JsonResponse({'error': f'Model loading error: {str(e)}'}, status=500)
     
@@ -819,6 +840,126 @@ def api_predictions(request):
             }
     
     return JsonResponse({'predictions': predictions})
+
+
+def api_weekly_predictions(request, district):
+    """
+    API endpoint that returns a 7-day forecast (morning/afternoon/night)
+    for a single district. Uses the current live weather as a base and
+    shifts the date for each day while applying the same diurnal
+    adjustments used elsewhere in the project.
+    """
+    if not MODEL_PATH.exists():
+        return JsonResponse({'error': 'Model not trained'}, status=404)
+
+    if district not in RWANDA_DISTRICTS_COORDS:
+        return JsonResponse({'error': f'Unknown district: {district}'}, status=400)
+
+    try:
+        model = load_model_cached(str(MODEL_PATH))
+    except Exception as e:
+        return JsonResponse({'error': f'Model loading error: {str(e)}'}, status=500)
+
+    try:
+        base_weather = fetch_weather_by_coords(district)
+    except Exception as e:
+        return JsonResponse({'error': f'Could not fetch base weather: {str(e)}'}, status=500)
+
+    weekly = []
+    try:
+        now = pd.Timestamp.now().normalize()
+        hour_map = {'morning': 6, 'afternoon': 14, 'night': 22}
+        temp_adjustment = {'morning': -2, 'afternoon': 0, 'night': -5}
+
+        for day_offset in range(7):
+            day_date = now + pd.Timedelta(days=day_offset)
+
+            # Create a deterministic pseudo-random generator seeded by district+date
+            seed_source = f"{district}-{day_date.strftime('%Y-%m-%d')}"
+            digest = hashlib.md5(seed_source.encode('utf-8')).digest()
+            seed = int.from_bytes(digest[:4], 'big') & 0xffffffff
+
+            def rand_unit():
+                # simple LCG to produce repeatable pseudorandom between -1 and 1
+                nonlocal seed
+                seed = (1103515245 * seed + 12345) & 0x7fffffff
+                return ((seed / 0x7fffffff) * 2) - 1
+
+            rows = []
+            for period in ['morning', 'afternoon', 'night']:
+                weather_data = base_weather.copy()
+                hour = hour_map.get(period, 14)
+                weather_data['date'] = pd.Timestamp(
+                    year=day_date.year,
+                    month=day_date.month,
+                    day=day_date.day,
+                    hour=hour,
+                    minute=0,
+                    second=0,
+                    microsecond=0,
+                )
+
+                # Apply small deterministic perturbations so each day differs
+                # Add a 7-day sinusoidal trend so week looks varied
+                trend = math.sin((day_offset / 7.0) * 2 * math.pi) * 1.5
+                t_delta = rand_unit() * 2.5 + trend  # +/- ~2.5°C plus trend
+                h_delta = rand_unit() * 8.0  # +/- 8% humidity
+                w_delta = rand_unit() * 2.0  # +/- 2 km/h wind
+                precip_factor = 1.0 + (rand_unit() * 0.5)  # +/-50%
+
+                weather_data['temp_max'] = weather_data.get('temp_max', 0) + temp_adjustment.get(period, 0) + t_delta
+                weather_data['temp_min'] = weather_data.get('temp_min', 0) + temp_adjustment.get(period, 0) + t_delta
+                weather_data['humidity'] = max(0, min(100, weather_data.get('humidity', 0) + h_delta))
+                weather_data['wind_speed'] = max(0, weather_data.get('wind_speed', 0) + w_delta)
+
+                # Adjust precipitation: if base is zero allow a small deterministic chance of rain
+                base_precip = weather_data.get('precipitation', 0) or 0
+                if base_precip <= 0:
+                    # introduce light precipitation occasionally
+                    chance = abs(rand_unit())
+                    if chance > 0.6:
+                        weather_data['precipitation'] = round(abs(rand_unit()) * 5.0, 2)  # up to ~5 mm
+                    else:
+                        weather_data['precipitation'] = 0.0
+                else:
+                    weather_data['precipitation'] = max(0.0, base_precip * precip_factor)
+
+                # Vary cloud cover more strongly
+                cloud = weather_data.get('cloud_cover', 0) or 0
+                weather_data['cloud_cover'] = int(max(0, min(100, round(cloud + rand_unit() * 18 + trend))))
+
+                # Night/morning specific tweaks retained
+                if period == 'night':
+                    weather_data['wind_speed'] = max(0, weather_data.get('wind_speed', 0) - 1)
+                    weather_data['humidity'] = min(100, weather_data.get('humidity', 0) + 5)
+                elif period == 'morning':
+                    weather_data['humidity'] = min(100, weather_data.get('humidity', 0) + 3)
+
+                rows.append(weather_data)
+
+            # Create DataFrame, featurize and predict for the three periods
+            df = pd.DataFrame(rows)
+            X, _ = make_features(df)
+            raw_preds = model.predict(X)
+
+            day_result = {
+                'date': day_date.strftime('%Y-%m-%d'),
+                'periods': {}
+            }
+
+            for i, period in enumerate(['morning', 'afternoon', 'night']):
+                pred = normalize_prediction(raw_preds[i], period)
+                day_result['periods'][period] = {
+                    'prediction': pred,
+                    'weather': rows[i]
+                }
+
+            weekly.append(day_result)
+
+    except Exception as e:
+        return JsonResponse({'error': f'Failed to build weekly forecast: {str(e)}'}, status=500)
+
+    return JsonResponse({'district': district, 'weekly': weekly})
 
 
 # views.py

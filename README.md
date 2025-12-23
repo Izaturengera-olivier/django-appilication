@@ -30,6 +30,7 @@ A comprehensive machine learning-based weather prediction system for Rwanda, fea
 - **Admin Dashboard**: Statistics, charts, and historical data visualization
 - **Monthly Summary**: Aggregated weather statistics by month
 - **Training Interface**: Retrain the ML model with new data
+ - **Weekly Auto-Flow Forecast**: A 7-day horizontal forecast that autoscrolls smoothly (morning/afternoon/night) for the selected district, with a continuous loop and pause-on-hover UX.
 
 ### Admin Features
 - User authentication and authorization
@@ -311,6 +312,28 @@ GET /api/predictions/
 - Cached for 5 minutes
 - Predictions for 30 Rwanda districts
 - Three time periods per district
+
+### Weekly Forecast API
+
+#### Get 7-Day Forecast For A District
+```
+GET /api/weekly/<district>/
+```
+
+**Response:** JSON with a `weekly` array of 7 items. Each item contains `date` and `periods` (morning/afternoon/night) with `prediction` and `weather` fields. The weekly values are produced by seeding the current live weather and applying a deterministic per-day perturbation (seeded by district+date) so each day differs but remains reproducible.
+
+Example usage:
+```bash
+curl http://127.0.0.1:8000/api/weekly/Kigali/
+```
+
+Notes:
+- The model (`model.joblib`) must be trained and available before this endpoint will return predictions.
+- Weather inputs are slightly varied per day (temperature, humidity, wind, cloud, precipitation) so the model returns varied daily predictions rather than repeating the same forecast.
+
+Frontend integration:
+- The live dashboard (`live_dashboard.html`) fetches this endpoint when a district is selected and renders a horizontally-flowing weekly scroller.
+- To adjust scroll speed, edit the `_scrollSpeedPxPerSec` variable in `web/weather_app/templates/weather_app/live_dashboard.html` (default is `40` px/s).
 
 ## 📊 Weather Conditions
 

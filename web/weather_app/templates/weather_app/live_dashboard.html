@@ -96,11 +96,84 @@
       stroke: transparent !important;
       stroke-width: 0 !important;
     }
+    /* Weekly forecast horizontal scroller */
+    .weekly-container {
+      gap: 12px;
+    }
+    .day-card {
+      min-width: 200px;
+      max-width: 240px;
+      background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+      border-radius: 12px;
+      padding: 12px 14px;
+      box-shadow: 0 6px 18px rgba(16,24,40,0.06);
+      border: 1px solid rgba(15,23,42,0.04);
+      text-align: center;
+      flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .day-card .day-header {
+      font-weight: 700;
+      margin-bottom: 6px;
+      color: #333;
+    }
+    .day-card .period-row {
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      padding:6px 0;
+      font-size:0.9rem;
+    }
+    .period-badge {
+      display:inline-block;
+      min-width:64px;
+      border-radius:6px;
+      padding:4px 6px;
+      font-weight:600;
+    }
+    /* Scroller behavior */
+    .weekly-container {
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none; /* Firefox */
+    }
+    .weekly-container::-webkit-scrollbar { display: none; }
+    /* Center min/max display */
+    .day-mid {
+      margin-top: 8px;
+      font-weight:700;
+      font-size:1.05rem;
+      color:#111827;
+    }
+    /* Arrow controls */
+    .weekly-controls { position: relative; }
+    .weekly-arrow {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 36px;
+      height: 36px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.9);
+      border: 1px solid rgba(0,0,0,0.06);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      box-shadow: 0 6px 16px rgba(2,6,23,0.08);
+      cursor: pointer;
+      z-index: 10;
+    }
+    .weekly-arrow.left { left: -18px; }
+    .weekly-arrow.right { right: -18px; }
   </style>
 </head>
 <body>
 
 <div class="container mt-4">
+  <div class="d-flex justify-content-end mb-3">
+    <a href="{% url 'home' %}" class="btn btn-secondary">← Back to Home</a>
+  </div>
   <div class="row">
     <!-- District Selection and Map -->
     <div class="col-lg-8">
@@ -156,9 +229,21 @@
               {% if district == selected %}
             <h4 class="text-primary mb-4">{{ selected }}</h4>
             
+              <!-- Weekly horizontal forecast -->
+              <div id="weekly-forecast" class="mb-3">
+                <h6 class="text-muted">Weekly Forecast</h6>
+                <div class="weekly-controls" style="position:relative;">
+                  <div class="weekly-arrow left" id="weekly-prev" title="Previous">◀</div>
+                  <div class="weekly-arrow right" id="weekly-next" title="Next">▶</div>
+                  <div class="weekly-container d-flex overflow-auto py-3" id="weekly-container">
+                    <!-- day cards injected by JS -->
+                  </div>
+                </div>
+              </div>
+            
             <!-- Morning -->
             <div class="time-period morning mb-3">
-              <strong>🌅 Morning (6 AM)</strong>
+              <strong>🌅 Morning </strong>
               {% if data.morning.prediction %}
                 <div class="mt-2">
                   <span class="weather-badge {{ data.morning.prediction }}">{{ data.morning.prediction|title }}</span>
@@ -181,7 +266,7 @@
 
             <!-- Afternoon -->
             <div class="time-period afternoon mb-3">
-              <strong>☀️ Afternoon (2 PM)</strong>
+              <strong>☀️ Afternoon </strong>
               {% if data.afternoon.prediction %}
                 <div class="mt-2">
                   <span class="weather-badge {{ data.afternoon.prediction }}">{{ data.afternoon.prediction|title }}</span>
@@ -204,7 +289,7 @@
 
             <!-- Night -->
             <div class="time-period night mb-3">
-              <strong>🌙 Night (10 PM)</strong>
+              <strong>🌙 Night</strong>
               {% if data.night.prediction %}
                 <div class="mt-2">
                   <span class="weather-badge {{ data.night.prediction }}">{{ data.night.prediction|title }}</span>
@@ -932,6 +1017,240 @@
   // Show selected district if one is selected
   {% if selected %}
     showDistrict("{{ selected }}");
+  {% endif %}
+
+  // Fetch and render weekly forecast for a selected district
+  function renderWeeklyForecast(weeklyData) {
+    var container = document.getElementById('weekly-container');
+    if (!container) return;
+    container.innerHTML = '';
+
+    weeklyData.forEach(function(day, idx) {
+      var dayCard = document.createElement('div');
+      dayCard.className = 'day-card';
+
+      var header = document.createElement('div');
+      header.className = 'day-header';
+      var dt = new Date(day.date + 'T00:00:00');
+      var options = { weekday: 'short', month: 'short', day: 'numeric' };
+      header.textContent = dt.toLocaleDateString(undefined, options);
+      dayCard.appendChild(header);
+
+      // big icon and min/max center
+      var iconDiv = document.createElement('div');
+      iconDiv.style.fontSize = '30px';
+      iconDiv.style.margin = '6px 0';
+      // choose main icon from afternoon prediction
+      var mainPred = (day.periods && day.periods.afternoon && day.periods.afternoon.prediction) ? day.periods.afternoon.prediction : '';
+      iconDiv.textContent = getEmojiForPrediction(mainPred);
+      dayCard.appendChild(iconDiv);
+
+      // periods rows with small icon and label
+      ['morning','afternoon','night'].forEach(function(period) {
+        var p = day.periods[period] || {};
+        var row = document.createElement('div');
+        row.className = 'period-row';
+
+        var labelWrap = document.createElement('div');
+        labelWrap.style.display = 'flex';
+        labelWrap.style.alignItems = 'center';
+        labelWrap.style.gap = '8px';
+
+        var smallIcon = document.createElement('div');
+        smallIcon.style.fontSize = '18px';
+        smallIcon.textContent = getEmojiForPrediction(p.prediction);
+
+        var label = document.createElement('div');
+        label.textContent = period.charAt(0).toUpperCase() + period.slice(1);
+        label.style.fontSize = '0.9rem';
+        label.style.color = '#374151';
+
+        labelWrap.appendChild(smallIcon);
+        labelWrap.appendChild(label);
+
+        var badge = document.createElement('div');
+        badge.className = 'period-badge';
+        var pred = (p && p.prediction) ? p.prediction : 'N/A';
+        badge.textContent = pred ? (pred.replace('_',' ')).toUpperCase() : 'N/A';
+        badge.style.fontSize = '0.78rem';
+        badge.style.padding = '4px 8px';
+        badge.style.background = colorForPrediction(pred);
+        badge.style.color = badge.style.background === '#FFD700' ? '#000' : '#fff';
+
+        row.appendChild(labelWrap);
+        row.appendChild(badge);
+        dayCard.appendChild(row);
+      });
+
+      // optionally show a placeholder min/max if available from morning/afternoon/night
+      var temps = [];
+      ['morning','afternoon','night'].forEach(function(p){
+        var w = day.periods[p] && day.periods[p].weather;
+        if (w && typeof w.temp_max !== 'undefined') temps.push(w.temp_max);
+      });
+      if (temps.length) {
+        var min = Math.min.apply(null, temps).toFixed(0);
+        var max = Math.max.apply(null, temps).toFixed(0);
+        var mid = document.createElement('div');
+        mid.className = 'day-mid';
+        mid.textContent = min + '° / ' + max + '°';
+        dayCard.appendChild(mid);
+      }
+
+      container.appendChild(dayCard);
+    });
+  }
+
+  function fetchWeeklyForecast(district) {
+    if (!district) return;
+    var url = '/api/weekly/' + encodeURIComponent(district) + '/?t=' + new Date().getTime();
+    var container = document.getElementById('weekly-container');
+    if (container) container.innerHTML = '<div class="px-3">Loading weekly forecast...</div>';
+
+    fetch(url)
+      .then(function(res){ if(!res.ok) throw new Error('Failed'); return res.json(); })
+      .then(function(json){
+        if (json.weekly) {
+          renderWeeklyForecast(json.weekly);
+        } else if (json.error) {
+          if (container) container.innerHTML = '<div class="px-3 text-danger">'+json.error+'</div>';
+        }
+      })
+      .catch(function(err){
+        if (container) container.innerHTML = '<div class="px-3 text-danger">Error loading weekly forecast</div>';
+        console.error('Weekly forecast error', err);
+      });
+  }
+
+  // Utility: small emoji icon for prediction types
+  function getEmojiForPrediction(pred) {
+    if (!pred) return '—';
+    pred = pred.toLowerCase();
+    if (pred.indexOf('rain') !== -1) return '🌧️';
+    if (pred.indexOf('storm') !== -1) return '⛈️';
+    if (pred.indexOf('sun') !== -1) return '☀️';
+    if (pred.indexOf('cloud') !== -1) return '☁️';
+    if (pred.indexOf('fog') !== -1) return '🌫️';
+    if (pred.indexOf('clear_night') !== -1 || pred.indexOf('night') !== -1) return '🌙';
+    return '📍';
+  }
+
+  function colorForPrediction(pred) {
+    if (!pred) return '#9CA3AF';
+    pred = pred.toLowerCase();
+    if (pred.indexOf('rain') !== -1) return '#3B82F6';
+    if (pred.indexOf('storm') !== -1) return '#374151';
+    if (pred.indexOf('sun') !== -1) return '#F59E0B';
+    if (pred.indexOf('cloud') !== -1) return '#60A5FA';
+    if (pred.indexOf('fog') !== -1) return '#9CA3AF';
+    if (pred.indexOf('clear_night') !== -1 || pred.indexOf('night') !== -1) return '#1E3A8A';
+    return '#6B7280';
+  }
+
+  // Continuous auto-scroll logic using requestAnimationFrame for smooth 'river' flow
+  var _rafId = null;
+  var _isAutoScrolling = false;
+  var _lastFrameTime = null;
+  var _scrollSpeedPxPerSec = 40; // adjust for faster/slower flow
+  var _originalScrollWidth = 0;
+
+  function duplicateWeeklyItemsIfNeeded(container) {
+    if (!container) return;
+    // Always duplicate fresh: first capture current children HTML (single set)
+    var html = container.innerHTML || '';
+    if (!html) return;
+    // Reset duplication flag and set duplicated content (single copy + copy)
+    container.dataset.duplicated = '1';
+    container.innerHTML = html + html;
+    // record original width (half of new scrollWidth)
+    _originalScrollWidth = container.scrollWidth / 2;
+  }
+
+  function startAutoScroll() {
+    var container = document.getElementById('weekly-container');
+    if (!container) return;
+    stopAutoScroll();
+    duplicateWeeklyItemsIfNeeded(container);
+    _isAutoScrolling = true;
+    _lastFrameTime = null;
+    function step(timestamp) {
+      if (!_isAutoScrolling) { _rafId = requestAnimationFrame(step); return; }
+      if (!_lastFrameTime) _lastFrameTime = timestamp;
+      var dt = (timestamp - _lastFrameTime) / 1000;
+      _lastFrameTime = timestamp;
+      var delta = _scrollSpeedPxPerSec * dt;
+      // advance scrollLeft
+      container.scrollLeft += delta;
+      // wrap seamlessly when reaching original width
+      if (_originalScrollWidth && container.scrollLeft >= _originalScrollWidth) {
+        container.scrollLeft = container.scrollLeft - _originalScrollWidth;
+      }
+      _rafId = requestAnimationFrame(step);
+    }
+    _rafId = requestAnimationFrame(step);
+  }
+
+  function stopAutoScroll() {
+    _isAutoScrolling = false;
+    if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
+  }
+
+  // Prev/Next controls: jump by one card width
+  document.addEventListener('click', function(e){
+    var c = document.getElementById('weekly-container'); if (!c) return;
+    var card = c.querySelector('.day-card'); if (!card) return;
+    var gap = 12; // matches CSS gap
+    var step = card.offsetWidth + gap;
+    if (e.target && e.target.id === 'weekly-next') {
+      stopAutoScroll();
+      c.scrollBy({ left: step, behavior: 'smooth' });
+      setTimeout(startAutoScroll, 1200);
+    }
+    if (e.target && e.target.id === 'weekly-prev') {
+      stopAutoScroll();
+      c.scrollBy({ left: -step, behavior: 'smooth' });
+      setTimeout(startAutoScroll, 1200);
+    }
+  });
+
+  // Pause auto-scroll on hover (mouseenter/leave on container)
+  (function(){
+    var c = document.getElementById('weekly-container');
+    if (!c) return;
+    c.addEventListener('mouseenter', function(){ stopAutoScroll(); });
+    c.addEventListener('mouseleave', function(){ startAutoScroll(); });
+  })();
+
+  // Start auto-scroll when new content is rendered
+  var origRender = renderWeeklyForecast;
+  renderWeeklyForecast = function(data) {
+    origRender(data);
+    // duplicate items and start continuous scrolling after layout
+    setTimeout(function(){
+      var container = document.getElementById('weekly-container');
+      if (container) {
+        // reset duplication so we duplicate fresh for this render
+        container.dataset.duplicated = '0';
+        duplicateWeeklyItemsIfNeeded(container);
+        // ensure starting near beginning
+        container.scrollLeft = 0;
+        startAutoScroll();
+      }
+    }, 80);
+  };
+
+  // When district selection changes, fetch weekly forecast
+  var districtSelectEl = document.getElementById('districtSelect');
+  if (districtSelectEl) {
+    districtSelectEl.addEventListener('change', function(){
+      var d = this.value;
+      if (d) fetchWeeklyForecast(d);
+    });
+  }
+
+  // If a district is already selected server-side, load its weekly forecast
+  {% if selected %}
+    fetchWeeklyForecast("{{ selected }}");
   {% endif %}
 
   // Auto-submit form when district is selected (optional - can be removed if you prefer button click)

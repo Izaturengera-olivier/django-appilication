@@ -73,14 +73,22 @@
 </head>
 <body>
 <div class="container">
-  <h1>Training Completed</h1>
+  {% if error %}
+    <h1>Training Failed</h1>
+    <div class="alert alert-danger" role="alert">
+      <h4 class="alert-heading">Error!</h4>
+      <p>{{ error }}</p>
+    </div>
+  {% else %}
+    <h1>Training Completed</h1>
 
-  <p class="accuracy">Accuracy: {{ accuracy|floatformat:3 }}</p>
+    <p class="accuracy">Accuracy: {{ accuracy|floatformat:3 }}</p>
 
-  <div class="report mb-4">
-    <h4>Classification Report</h4>
-    <pre>{{ report }}</pre>
-  </div>
+    <div class="report mb-4">
+      <h4>Classification Report</h4>
+      <pre>{{ report }}</pre>
+    </div>
+  {% endif %}
 
   {% if importances %}
     <h4>Top Features</h4>
